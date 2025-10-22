@@ -10,19 +10,16 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install rclone
+      - name: Install latest rclone
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y rclone
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          rclone version
 
       - name: Configure rclone remotes
         shell: bash
         run: |
           mkdir -p ~/.config/rclone
-          # Obfuskera FTP-lösenordet så rclone accepterar det i conf
           FTP_PASS_OBSCURED=$(rclone obscure "${{ secrets.FTP_PASS }}")
-
-          # Skriv rclone.conf (OBS: GDRIVE_TOKEN måste vara exakt JSON i en rad)
           cat > ~/.config/rclone/rclone.conf <<EOF
           [ftp]
           type = ftp
@@ -40,28 +37,65 @@ jobs:
           sed -E 's/(pass = ).*/\1***hidden***/; s/(token = ).*/\1***hidden***/' ~/.config/rclone/rclone.conf
           echo "=================================="
 
-      - name: Testa listning (FTP)
+      # Snabba sanity checks
+      - name: Test list (FTP and Drive)
+        run: |
+          set -x
+          rclone lsd ftp: -vv --timeout 2m --contimeout 20s
+          rclone about drive: -vv || true
+
+      # ISOLERA FTP: hämta EN liten fil till /tmp så vi vet att datakanalen funkar
+      - name: FTP single-file smoke test → /tmp (PASV + skip_control_ip)
         run: |
           SRC="ftp:/FromGenero/KivikDataExport/"
-          rclone ls "$SRC" \
+          rclone copy "$SRC" /tmp \
+            --include "Kivik_Appointment.csv" \
+            --size-only \
+            --transfers=1 \
             --ftp-concurrency=1 \
-            --ftp-disable-epsv \
-            -vv \
-            --timeout 5m \
-            --contimeout 30s
+            --ftp-skip-control-ip=true \
+            --timeout 3m \
+            --contimeout 20s \
+            -vv
 
-      - name: Copy folder FTP → Google Drive (EPSV av)
+      # Huvudkörning – Försök 1: standard (EPSV/PASV) + skip_control_ip
+      - name: Copy FTP → Google Drive [try #1: EPSV/PASV + skip_control_ip]
+        id: copy1
+        continue-on-error: true
         run: |
           SRC="ftp:/FromGenero/KivikDataExport/"
           DST="drive:/Kivik"
           rclone copy "$SRC" "$DST" \
             --progress \
             --transfers=1 \
-            --ftp-concurrency=1 \
-            --ftp-disable-epsv \
+            --checkers=2 \
             --no-update-modtime \
+            --ftp-concurrency=1 \
+            --ftp-skip-control-ip=true \
             --retries 3 \
             --low-level-retries 10 \
+            --retries-sleep 10s \
+            --timeout 10m \
+            --contimeout 30s \
+            --stats 30s -vv
+
+      # Huvudkörning – Fallback: stäng av EPSV (vissa servrar kräver detta)
+      - name: Copy FTP → Google Drive [try #2: disable EPSV]
+        if: steps.copy1.outcome == 'failure'
+        run: |
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          DST="drive:/Kivik"
+          rclone copy "$SRC" "$DST" \
+            --progress \
+            --transfers=1 \
+            --checkers=2 \
+            --no-update-modtime \
+            --ftp-concurrency=1 \
+            --ftp-disable-epsv \
+            --ftp-skip-control-ip=true \
+            --retries 3 \
+            --low-level-retries 10 \
+            --retries-sleep 10s \
             --timeout 10m \
             --contimeout 30s \
             --stats 30s -vv
