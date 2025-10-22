@@ -1,81 +1,56 @@
 name: FTP to Google Drive (daily)
 
 on:
+  workflow_dispatch:
   schedule:
     - cron: "0 5 * * *"
-  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install rclone (latest)
-        shell: bash
+      - name: Install rclone
         run: |
-          set -e
           curl -fsSL https://rclone.org/install.sh | sudo bash
           rclone version
 
-      - name: Validate GDRIVE_TOKEN is valid JSON
-        shell: bash
-        env:
-          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+      - name: Configure rclone
         run: |
-          python3 - <<'PY'
-import os, json, sys
-t = os.environ.get("GDRIVE_TOKEN","")
-try:
-    json.loads(t)
-    print("GDRIVE_TOKEN looks like valid JSON")
-except Exception as e:
-    print("GDRIVE_TOKEN is NOT valid JSON:", e)
-    sys.exit(1)
-PY
+          mkdir -p ~/.config/rclone
+          FTP_PASS_OBS=$(rclone obscure "${{ secrets.FTP_PASS }}")
 
-      - name: Write rclone.conf
-        shell: bash
+          cat <<EOF > ~/.config/rclone/rclone.conf
+[ftp]
+type = ftp
+host = ${{ secrets.FTP_HOST }}
+port = ${{ secrets.FTP_PORT }}
+user = ${{ secrets.FTP_USER }}
+pass = $FTP_PASS_OBS
+# explicit_tls = true   # Avkommentera om servern kräver FTPS
+
+[drive]
+type = drive
+token = ${{ secrets.GDRIVE_TOKEN }}
+EOF
+
+          echo "✅ Konfiguration skapad."
+
+      - name: Testa FTP-listning
         run: |
-          set -e
-          mkdir -p "$HOME/.config/rclone"
-          FTP_PASS_OBS="$(rclone obscure '${{ secrets.FTP_PASS }}')"
-          CFG="$HOME/.config/rclone/rclone.conf"
+          rclone lsd "ftp:/FromGenero/KivikDataExport/" -vv --timeout 120s
 
-          printf '%s\n' "[ftp]" > "$CFG"
-          printf '%s\n' "type = ftp" >> "$CFG"
-          printf '%s\n' "host = ${{ secrets.FTP_HOST }}" >> "$CFG"
-          printf '%s\n' "port = ${{ secrets.FTP_PORT }}" >> "$CFG"
-          printf '%s\n' "user = ${{ secrets.FTP_USER }}" >> "$CFG"
-          printf '%s\n' "pass = ${FTP_PASS_OBS}" >> "$CFG"
-          # Om er server kräver FTPS (explicit TLS på port 21), avkommentera nästa rad:
-          # printf '%s\n' "explicit_tls = true" >> "$CFG"
-
-          printf '%s\n' "[drive]" >> "$CFG"
-          printf '%s\n' "type = drive" >> "$CFG"
-          printf '%s\n' "token = ${{ secrets.GDRIVE_TOKEN }}" >> "$CFG"
-
-      - name: Sanity list (FTP)
-        shell: bash
+      - name: Testa Google Drive-listning
         run: |
-          set -e
-          rclone lsd "ftp:/FromGenero/KivikDataExport/" -vv --timeout 120s --contimeout 20s
-
-      - name: Sanity list (Drive)
-        shell: bash
-        run: |
-          set -e
           rclone lsd "drive:/" -vv --timeout 60s
 
-      - name: Copy FTP -> Google Drive (EPSV default)
-        shell: bash
+      - name: Kopiera FTP → Google Drive
         run: |
-          set -e
-          SRC="ftp:/FromGenero/KivikDataExport/"
-          DST="drive:/Kivik"
-          rclone copy "$SRC" "$DST" \
-            --progress \
-            --transfers=1 --checkers=2 \
+          rclone copy "ftp:/FromGenero/KivikDataExport/" "drive:/Kivik" \
+            --transfers 1 \
+            --checkers 2 \
             --no-update-modtime \
-            --retries 3 --low-level-retries 10 --retries-sleep 10s \
-            --timeout 900s --contimeout 30s \
+            --retries 3 \
+            --low-level-retries 10 \
+            --timeout 900s \
             --stats 30s -vv
