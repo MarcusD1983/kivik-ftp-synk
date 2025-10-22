@@ -1,8 +1,9 @@
-name: FTP to OneDrive Sync
+name: FTP to Google Drive (daily)
+
 on:
   schedule:
-    - cron: '0 5 * * *'   # kör varje dag kl 05:00 UTC (07:00 svensk tid)
-  workflow_dispatch:      # så du kan köra manuellt vid behov
+    - cron: '0 5 * * *'   # 05:00 UTC ≈ 07:00 i Sverige
+  workflow_dispatch:
 
 jobs:
   sync:
@@ -24,12 +25,12 @@ jobs:
             echo "user = ${{ secrets.FTP_USER }}"
             echo "pass = ${{ secrets.FTP_PASS }}"
             echo ""
-            echo "[onedrive]"
-            echo "type = onedrive"
-            echo "token = ${{ secrets.ONEDRIVE_TOKEN }}"
+            echo "[drive]"
+            echo "type = drive"
+            echo "token = ${{ secrets.GDRIVE_TOKEN }}"
           } > ~/.config/rclone/rclone.conf
 
-      - name: Copy file FTP → OneDrive
+      - name: Copy single file FTP → Google Drive
         run: |
-          # Ändra källsökvägen om din fil ligger i en undermapp på FTP
-          rclone copy "ftp:/Kivik_Campaigns.csv" "onedrive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+          # Ändra källsökväg om filen ligger i undermapp på FTP
+          rclone copy "/FromGenero/KivikDataExport" "drive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
