@@ -1,0 +1,35 @@
+name: FTP to OneDrive Sync
+on:
+  schedule:
+    - cron: '0 5 * * *'   # kör varje dag kl 05:00 UTC (07:00 svensk tid)
+  workflow_dispatch:      # så du kan köra manuellt vid behov
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install rclone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rclone
+
+      - name: Configure rclone remotes
+        run: |
+          mkdir -p ~/.config/rclone
+          {
+            echo "[ftp]"
+            echo "type = ftp"
+            echo "host = ${{ secrets.FTP_HOST }}"
+            echo "port = ${{ secrets.FTP_PORT }}"
+            echo "user = ${{ secrets.FTP_USER }}"
+            echo "pass = ${{ secrets.FTP_PASS }}"
+            echo ""
+            echo "[onedrive]"
+            echo "type = onedrive"
+            echo "token = ${{ secrets.ONEDRIVE_TOKEN }}"
+          } > ~/.config/rclone/rclone.conf
+
+      - name: Copy file FTP → OneDrive
+        run: |
+          # Ändra källsökvägen om din fil ligger i en undermapp på FTP
+          rclone copy "ftp:/Kivik_Campaigns.csv" "onedrive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
