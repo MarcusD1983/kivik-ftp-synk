@@ -19,40 +19,49 @@ jobs:
         shell: bash
         run: |
           mkdir -p ~/.config/rclone
+          # Obfuskera FTP-lösenordet så rclone accepterar det i conf
           FTP_PASS_OBSCURED=$(rclone obscure "${{ secrets.FTP_PASS }}")
 
+          # Skriv rclone.conf (OBS: GDRIVE_TOKEN måste vara exakt JSON i en rad)
           cat > ~/.config/rclone/rclone.conf <<EOF
           [ftp]
           type = ftp
           host = ${{ secrets.FTP_HOST }}
           port = ${{ secrets.FTP_PORT }}
           user = ${{ secrets.FTP_USER }}
-          pass = __FTP_PASS_OBSCURED__
+          pass = ${FTP_PASS_OBSCURED}
 
           [drive]
           type = drive
           token = ${{ secrets.GDRIVE_TOKEN }}
           EOF
 
-          sed -i "s|__FTP_PASS_OBSCURED__|$FTP_PASS_OBSCURED|g" ~/.config/rclone/rclone.conf
+          echo "===== rclone.conf (maskerat) ====="
+          sed -E 's/(pass = ).*/\1***hidden***/; s/(token = ).*/\1***hidden***/' ~/.config/rclone/rclone.conf
+          echo "=================================="
 
-          echo "===== rclone.conf ====="
-          sed 's/pass = .*/pass = ***hidden***/' ~/.config/rclone/rclone.conf
-          echo "======================="
-
-      - name: Copy folder FTP → Google Drive
+      - name: Testa listning (FTP)
         run: |
-          # Ändra källsökvägen här om din FTP-mapp skiljer sig
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          rclone ls "$SRC" \
+            --ftp-concurrency=1 \
+            --ftp-disable-epsv \
+            -vv \
+            --timeout 5m \
+            --contimeout 30s
+
+      - name: Copy folder FTP → Google Drive (EPSV av)
+        run: |
           SRC="ftp:/FromGenero/KivikDataExport/"
           DST="drive:/Kivik"
-
-          # Kör kopieringen (binärt, bevarar å/ä/ö)
           rclone copy "$SRC" "$DST" \
             --progress \
             --transfers=1 \
             --ftp-concurrency=1 \
+            --ftp-disable-epsv \
             --no-update-modtime \
             --retries 3 \
-            --low-level-retries 10
-            # Om FTP-strular med passivt läge, lägg till:
-            # --ftp-disable-epsv
+            --low-level-retries 10 \
+            --timeout 10m \
+            --contimeout 30s \
+            --stats 30s -vv
