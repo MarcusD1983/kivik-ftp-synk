@@ -17,38 +17,54 @@ jobs:
           curl -fsSL https://rclone.org/install.sh | sudo bash
           rclone version
 
+      - name: Validate GDRIVE_TOKEN is valid JSON
+        shell: bash
+        env:
+          GDRIVE_TOKEN: ${{ secrets.GDRIVE_TOKEN }}
+        run: |
+          python3 - <<'PY'
+import os, json, sys
+t = os.environ.get("GDRIVE_TOKEN","")
+try:
+    json.loads(t)
+    print("GDRIVE_TOKEN looks like valid JSON")
+except Exception as e:
+    print("GDRIVE_TOKEN is NOT valid JSON:", e)
+    sys.exit(1)
+PY
+
       - name: Write rclone.conf
         shell: bash
         run: |
           set -e
           mkdir -p "$HOME/.config/rclone"
-          FTP_PASS_OBS="$(rclone obscure "${{ secrets.FTP_PASS }}")"
+          FTP_PASS_OBS="$(rclone obscure '${{ secrets.FTP_PASS }}')"
           CFG="$HOME/.config/rclone/rclone.conf"
 
-          # FTP-remote
           printf '%s\n' "[ftp]" > "$CFG"
           printf '%s\n' "type = ftp" >> "$CFG"
           printf '%s\n' "host = ${{ secrets.FTP_HOST }}" >> "$CFG"
           printf '%s\n' "port = ${{ secrets.FTP_PORT }}" >> "$CFG"
           printf '%s\n' "user = ${{ secrets.FTP_USER }}" >> "$CFG"
           printf '%s\n' "pass = ${FTP_PASS_OBS}" >> "$CFG"
-          # Om servern kräver FTPS, avkommentera nästa rad:
+          # Om er server kräver FTPS (explicit TLS på port 21), avkommentera nästa rad:
           # printf '%s\n' "explicit_tls = true" >> "$CFG"
 
-          # Google Drive-remote
           printf '%s\n' "[drive]" >> "$CFG"
           printf '%s\n' "type = drive" >> "$CFG"
-          # Viktigt: token MÅSTE vara enradigt JSON
           printf '%s\n' "token = ${{ secrets.GDRIVE_TOKEN }}" >> "$CFG"
-
-          echo "rclone.conf klar:"
-          sed -E 's/(pass = ).*/\1***hidden***/; s/(token = ).*/\1***hidden***/' "$CFG"
 
       - name: Sanity list (FTP)
         shell: bash
         run: |
           set -e
           rclone lsd "ftp:/FromGenero/KivikDataExport/" -vv --timeout 120s --contimeout 20s
+
+      - name: Sanity list (Drive)
+        shell: bash
+        run: |
+          set -e
+          rclone lsd "drive:/" -vv --timeout 60s
 
       - name: Copy FTP -> Google Drive (EPSV default)
         shell: bash
