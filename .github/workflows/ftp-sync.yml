@@ -2,7 +2,7 @@ name: FTP to Google Drive (daily)
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # 05:00 UTC ≈ 07:00 Sverige
+    - cron: '0 5 * * *'
   workflow_dispatch:
 
 jobs:
@@ -27,75 +27,41 @@ jobs:
           port = ${{ secrets.FTP_PORT }}
           user = ${{ secrets.FTP_USER }}
           pass = ${FTP_PASS_OBSCURED}
+          # Om servern kräver FTPS (explicit), avkommentera nästa rad:
+          # explicit_tls = true
 
           [drive]
           type = drive
           token = ${{ secrets.GDRIVE_TOKEN }}
           EOF
-
-          echo "===== rclone.conf (maskerat) ====="
           sed -E 's/(pass = ).*/\1***hidden***/; s/(token = ).*/\1***hidden***/' ~/.config/rclone/rclone.conf
-          echo "=================================="
 
-      # Snabba sanity checks
-      - name: Test list (FTP and Drive)
+      - name: Smoke test FTP (lista katalog)
         run: |
-          set -x
-          rclone lsd ftp: -vv --timeout 2m --contimeout 20s
-          rclone about drive: -vv || true
+          rclone lsd ftp:/FromGenero/KivikDataExport/ -vv --timeout 2m --contimeout 20s
 
-      # ISOLERA FTP: hämta EN liten fil till /tmp så vi vet att datakanalen funkar
-      - name: FTP single-file smoke test → /tmp (PASV + skip_control_ip)
+      - name: Kontroll: publik FTP (Tele2) – bör alltid fungera
         run: |
-          SRC="ftp:/FromGenero/KivikDataExport/"
-          rclone copy "$SRC" /tmp \
-            --include "Kivik_Appointment.csv" \
-            --size-only \
-            --transfers=1 \
-            --ftp-concurrency=1 \
-            --ftp-skip-control-ip=true \
-            --timeout 3m \
-            --contimeout 20s \
-            -vv
-
-      # Huvudkörning – Försök 1: standard (EPSV/PASV) + skip_control_ip
-      - name: Copy FTP → Google Drive [try #1: EPSV/PASV + skip_control_ip]
-        id: copy1
+          rclone lsf :ftp: \
+            --ftp-host=speedtest.tele2.net \
+            --ftp-user=anonymous \
+            --ftp-pass=$(rclone obscure dummy) \
+            --max-depth 1 -vv --timeout 1m
         continue-on-error: true
-        run: |
-          SRC="ftp:/FromGenero/KivikDataExport/"
-          DST="drive:/Kivik"
-          rclone copy "$SRC" "$DST" \
-            --progress \
-            --transfers=1 \
-            --checkers=2 \
-            --no-update-modtime \
-            --ftp-concurrency=1 \
-            --ftp-skip-control-ip=true \
-            --retries 3 \
-            --low-level-retries 10 \
-            --retries-sleep 10s \
-            --timeout 10m \
-            --contimeout 30s \
-            --stats 30s -vv
 
-      # Huvudkörning – Fallback: stäng av EPSV (vissa servrar kräver detta)
-      - name: Copy FTP → Google Drive [try #2: disable EPSV]
-        if: steps.copy1.outcome == 'failure'
+      - name: Testa att hämta EN fil till /tmp (isolerar datakanal)
         run: |
-          SRC="ftp:/FromGenero/KivikDataExport/"
-          DST="drive:/Kivik"
-          rclone copy "$SRC" "$DST" \
+          rclone copy ftp:/FromGenero/KivikDataExport/ /tmp \
+            --include "Kivik_Appointment.csv" \
+            --size-only --transfers=1 --checkers=1 \
+            --timeout 3m --contimeout 20s -vv
+
+      - name: Copy FTP → Google Drive (EPSV, default)
+        run: |
+          rclone copy ftp:/FromGenero/KivikDataExport/ drive:/Kivik \
             --progress \
-            --transfers=1 \
-            --checkers=2 \
+            --transfers=1 --checkers=2 \
             --no-update-modtime \
-            --ftp-concurrency=1 \
-            --ftp-disable-epsv \
-            --ftp-skip-control-ip=true \
-            --retries 3 \
-            --low-level-retries 10 \
-            --retries-sleep 10s \
-            --timeout 10m \
-            --contimeout 30s \
+            --retries 3 --low-level-retries 10 --retries-sleep 10s \
+            --timeout 10m --contimeout 30s \
             --stats 30s -vv
