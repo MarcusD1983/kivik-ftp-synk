@@ -2,126 +2,109 @@ name: FTP to Google Drive (daily)
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # 05:00 UTC ≈ 07:00 Sverige
+    - cron: "0 5 * * *"
   workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    env:
-      SRC_DIR: "/FromGenero/KivikDataExport/"
-      TEST_FILE: "Kivik_Appointment.csv"    # byt om annan liten fil är säkrare
-      DST_DIR: "drive:/Kivik"
 
     steps:
-      - name: Install latest rclone
+      - name: Install rclone (latest)
         run: |
           curl -fsSL https://rclone.org/install.sh | sudo bash
           rclone version
 
-      - name: Maskera och sätt env (FTP/GDrive)
+      - name: Configure rclone remotes
         shell: bash
         run: |
-          echo "FTP_PASS_OBS=$(rclone obscure '${{ secrets.FTP_PASS }}')" >> $GITHUB_ENV
-          echo "GDRIVE_TOKEN=${{ secrets.GDRIVE_TOKEN }}" >> $GITHUB_ENV
+          set -euo pipefail
+          mkdir -p "$HOME/.config/rclone"
 
-      - name: Drive remote (ad-hoc) – sanity
-        run: |
-          rclone about :drive: --drive-token "$GDRIVE_TOKEN" -vv || true
+          FTP_PASS_OBS=$(rclone obscure "${{ secrets.FTP_PASS }}")
 
-      # --- TEST 1: EPSV (default), plain FTP ---
-      - name: Smoke: fetch 1 file → /tmp (EPSV, plain FTP)
+          cat > "$HOME/.config/rclone/rclone.conf" <<EOF
+[ftp]
+type = ftp
+host = ${{ secrets.FTP_HOST }}
+port = ${{ secrets.FTP_PORT }}
+user = ${{ secrets.FTP_USER }}
+pass = ${FTP_PASS_OBS}
+# If your server requires FTPS, uncomment the next line:
+# explicit_tls = true
+
+[drive]
+type = drive
+token = ${{ secrets.GDRIVE_TOKEN }}
+EOF
+
+          echo "rclone.conf written"
+
+      - name: Smoke test - fetch one file to /tmp (EPSV default)
         id: smoke_epsv
         continue-on-error: true
+        shell: bash
         run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS:${{ env.SRC_DIR }}" \
-            /tmp \
-            --include "${{ env.TEST_FILE }}" \
+          set -euo pipefail
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          TEST_FILE="Kivik_Appointment.csv"   # change to a guaranteed small file if needed
+          rclone copy "$SRC" /tmp \
+            --include "$TEST_FILE" \
             --transfers=1 --checkers=1 \
-            --timeout 3m --contimeout 20s \
-            --dump headers -vv
+            --timeout 180s --contimeout 20s \
+            -vv
 
-      # --- TEST 2: PASV (disable EPSV), plain FTP ---
-      - name: Smoke: fetch 1 file → /tmp (PASV = --ftp-disable-epsv, plain FTP)
-        id: smoke_pasv
-        if: steps.smoke_epsv.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS:${{ env.SRC_DIR }}" \
-            /tmp \
-            --include "${{ env.TEST_FILE }}" \
-            --transfers=1 --checkers=1 \
-            --timeout 3m --contimeout 20s \
-            --ftp-disable-epsv \
-            --dump headers -vv
-
-      # --- TEST 3: EPSV + FTPS (explicit TLS) ---
-      - name: Smoke: fetch 1 file → /tmp (EPSV + FTPS explicit)
-        id: smoke_ftps
-        if: steps.smoke_epsv.outcome == 'failure' && steps.smoke_pasv.outcome == 'failure'
-        continue-on-error: true
-        run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS,explicit_tls=true:${{ env.SRC_DIR }}" \
-            /tmp \
-            --include "${{ env.TEST_FILE }}" \
-            --transfers=1 --checkers=1 \
-            --timeout 3m --contimeout 20s \
-            --dump headers -vv
-
-      # --- COPY: välj lyckat läge av ovan (EPSV → PASV → FTPS) ---
-      - name: Copy FTP → Google Drive (EPSV)
+      - name: Copy FTP -> Google Drive (EPSV default)
         id: copy_epsv
-        continue-on-error: true
         if: steps.smoke_epsv.outcome == 'success'
+        shell: bash
         run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS:${{ env.SRC_DIR }}" \
-            ":drive,token=$GDRIVE_TOKEN:${{ env.DST_DIR }}" \
+          set -euo pipefail
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          DST="drive:/Kivik"
+          rclone copy "$SRC" "$DST" \
             --progress \
             --transfers=1 --checkers=2 \
             --no-update-modtime \
             --retries 3 --low-level-retries 10 --retries-sleep 10s \
-            --timeout 15m --contimeout 30s \
+            --timeout 900s --contimeout 30s \
             --stats 30s -vv
 
-      - name: Copy FTP → Google Drive (PASV = --ftp-disable-epsv)
-        id: copy_pasv
+      - name: Smoke test - fetch one file to /tmp (PASV, disable EPSV)
+        id: smoke_pasv
+        if: steps.smoke_epsv.outcome != 'success'
         continue-on-error: true
-        if: steps.smoke_epsv.outcome != 'success' && steps.smoke_pasv.outcome == 'success'
+        shell: bash
         run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS:${{ env.SRC_DIR }}" \
-            ":drive,token=$GDRIVE_TOKEN:${{ env.DST_DIR }}" \
+          set -euo pipefail
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          TEST_FILE="Kivik_Appointment.csv"
+          rclone copy "$SRC" /tmp \
+            --include "$TEST_FILE" \
+            --transfers=1 --checkers=1 \
+            --timeout 180s --contimeout 20s \
+            --ftp-disable-epsv \
+            -vv
+
+      - name: Copy FTP -> Google Drive (PASV, disable EPSV)
+        id: copy_pasv
+        if: steps.smoke_epsv.outcome != 'success' && steps.smoke_pasv.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="ftp:/FromGenero/KivikDataExport/"
+          DST="drive:/Kivik"
+          rclone copy "$SRC" "$DST" \
             --progress \
             --transfers=1 --checkers=2 \
             --no-update-modtime \
             --ftp-disable-epsv \
             --retries 3 --low-level-retries 10 --retries-sleep 10s \
-            --timeout 15m --contimeout 30s \
+            --timeout 900s --contimeout 30s \
             --stats 30s -vv
 
-      - name: Copy FTP → Google Drive (FTPS explicit)
-        id: copy_ftps
-        if: steps.smoke_epsv.outcome != 'success' && steps.smoke_pasv.outcome != 'success' && steps.smoke_ftps.outcome == 'success'
+      - name: Fail if both modes failed
+        if: steps.copy_epsv.outcome != 'success' && steps.copy_pasv.outcome != 'success'
         run: |
-          rclone copy \
-            ":ftp,host=${{ secrets.FTP_HOST }},port=${{ secrets.FTP_PORT }},user=${{ secrets.FTP_USER }},pass=$FTP_PASS_OBS,explicit_tls=true:${{ env.SRC_DIR }}" \
-            ":drive,token=$GDRIVE_TOKEN:${{ env.DST_DIR }}" \
-            --progress \
-            --transfers=1 --checkers=2 \
-            --no-update-modtime \
-            --retries 3 --low-level-retries 10 --retries-sleep 10s \
-            --timeout 15m --contimeout 30s \
-            --stats 30s -vv
-
-      - name: Fail if all modes failed
-        if: |
-          (steps.smoke_epsv.outcome != 'success') &&
-          (steps.smoke_pasv.outcome != 'success') &&
-          (steps.smoke_ftps.outcome != 'success')
-        run: |
-          echo "All FTP modes failed (EPSV, PASV, FTPS). Check dump headers for 227/229 and firewall/NAT."
+          echo "Both EPSV and PASV modes failed. Check runner logs and FTP firewall/NAT."
           exit 1
