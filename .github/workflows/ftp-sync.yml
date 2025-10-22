@@ -30,7 +30,7 @@ jobs:
             echo "token = ${{ secrets.GDRIVE_TOKEN }}"
           } > ~/.config/rclone/rclone.conf
 
-      - name: Copy single file FTP → Google Drive
+      - name: Copy only CSV
         run: |
-          # Ändra källsökväg om filen ligger i undermapp på FTP
-          rclone copy "/FromGenero/KivikDataExport" "drive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+          rclone copy "ftp:/FromGenero/KivikDataExport/" "drive:/Kivik" --include "*.csv" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+
