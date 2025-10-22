@@ -1,36 +1,41 @@
-name: FTP to Google Drive (daily)
-
-on:
-  schedule:
-    - cron: '0 5 * * *'   # 05:00 UTC ≈ 07:00 i Sverige
-  workflow_dispatch:
-
-jobs:
-  sync:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Install rclone
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y rclone
-
       - name: Configure rclone remotes
+        shell: bash
         run: |
+          sudo apt-get update && sudo apt-get install -y rclone
           mkdir -p ~/.config/rclone
-          {
-            echo "[ftp]"
-            echo "type = ftp"
-            echo "host = ${{ secrets.FTP_HOST }}"
-            echo "port = ${{ secrets.FTP_PORT }}"
-            echo "user = ${{ secrets.FTP_USER }}"
-            echo "pass = ${{ secrets.FTP_PASS }}"
-            echo ""
-            echo "[drive]"
-            echo "type = drive"
-            echo "token = ${{ secrets.GDRIVE_TOKEN }}"
-          } > ~/.config/rclone/rclone.conf
+          FTP_PASS_OBSCURED=$(rclone obscure "${{ secrets.FTP_PASS }}")
+          cat > ~/.config/rclone/rclone.conf <<'EOF'
+          [ftp]
+          type = ftp
+          host = ${{ secrets.FTP_HOST }}
+          port = ${{ secrets.FTP_PORT }}
+          user = ${{ secrets.FTP_USER }}
+          pass = __FTP_PASS_OBSCURED__
+          # Om servern strular med passive mode, test: disable_epsv = true
+          # disable_epsv = true
 
-      - name: Copy only CSV
+          [drive]
+          type = drive
+          token = ${{ secrets.GDRIVE_TOKEN }}
+          EOF
+          # ersätt placeholdern med obscured-värdet
+          sed -i "s|__FTP_PASS_OBSCURED__|$FTP_PASS_OBSCURED|g" ~/.config/rclone/rclone.conf
+
+      # --- VÄLJ EN AV NEDAN (lämna EN aktiv) ---
+
+      # 1) Kopiera HELA mappen på FTP → Google Drive
+      - name: Copy folder FTP → Google Drive
         run: |
-          rclone copy "ftp:/FromGenero/KivikDataExport/" "drive:/Kivik" --include "*.csv" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+          rclone copy "ftp:/FromGenero/KivikDataExport/" "drive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+          # Om anslutningen strular, testa att lägga till flaggan:
+          # --ftp-disable-epsv
 
+      # 2) ENDAST CSV i mappen
+      # - name: Copy only CSV
+      #   run: |
+      #     rclone copy "ftp:/FromGenero/KivikDataExport/" "drive:/Kivik" --include "*.csv" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
+
+      # 3) EN specifik fil
+      # - name: Copy single file
+      #   run: |
+      #     rclone copy "ftp:/FromGenero/KivikDataExport/Kivik_Campaigns.csv" "drive:/Kivik" --progress --transfers=1 --ftp-concurrency=1 --no-update-modtime
